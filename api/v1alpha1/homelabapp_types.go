@@ -20,19 +20,28 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
 // HomelabAppSpec defines the desired state of HomelabApp
 type HomelabAppSpec struct {
+	// Repo is the Git repo URL containing the app manifests
+	// +kubebuilder:validation:Required
+	Repo string `json:"repo"`
+
+	//Path is the directory within the repo containing the app manifests
+	// +kubebuilder:validation:Required
+	Path string `json:"path"`
+
+	// Domain is the public hostname to expose the app on
+	// +kubebuilder:validation:Required
+	Domain string `json:"domain"`
+
+	//TargetNamespace is the namespace the app will be deployed into
+	// +kubebuilder:validation:Required
+	TargetNamespace string `json:"targetNamespace"`
+
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 	// The following markers will use OpenAPI v3 schema to validate the value
 	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
-
-	// foo is an example field of HomelabApp. Edit homelabapp_types.go to remove/update
-	// +optional
-	Foo *string `json:"foo,omitempty"`
 }
 
 // HomelabAppStatus defines the observed state of HomelabApp.
@@ -60,6 +69,9 @@ type HomelabAppStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Domain",type="string",JSONPath=".spec.domain"
+// +kubebuilder:printcolumn:name="Namespace",type="string",JSONPath=".spec.targetNamespace"
+// +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 
 // HomelabApp is the Schema for the homelabapps API
 type HomelabApp struct {
@@ -90,3 +102,4 @@ type HomelabAppList struct {
 func init() {
 	SchemeBuilder.Register(&HomelabApp{}, &HomelabAppList{})
 }
+
