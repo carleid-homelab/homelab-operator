@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- homelab_v1alpha1_homelabapp.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples
