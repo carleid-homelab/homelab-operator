@@ -102,4 +102,3 @@ type HomelabAppList struct {
 func init() {
 	SchemeBuilder.Register(&HomelabApp{}, &HomelabAppList{})
 }
-

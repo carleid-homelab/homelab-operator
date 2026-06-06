@@ -101,7 +101,7 @@ func (r *HomelabAppReconciler) ensureNamespace(ctx context.Context, app *homelab
 		ObjectMeta: metav1.ObjectMeta{
 			Name: app.Spec.TargetNamespace,
 			Labels: map[string]string{
-				"managed-by": "homelab-operator",
+				"managed-by":  "homelab-operator",
 				"homelab-app": app.Name,
 			},
 		},
@@ -116,13 +116,13 @@ func (r *HomelabAppReconciler) ensureArgoCDApplication(ctx context.Context, app 
 
 	argoApp := &unstructured.Unstructured{}
 	argoApp.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "argoproj.io",
+		Group:   "argoproj.io",
 		Version: "v1alpha1",
-		Kind: "Application",
+		Kind:    "Application",
 	})
 
 	err := r.Get(ctx, types.NamespacedName{
-		Name: app.Name,
+		Name:      app.Name,
 		Namespace: "argocd",
 	}, argoApp)
 
@@ -138,29 +138,29 @@ func (r *HomelabAppReconciler) ensureArgoCDApplication(ctx context.Context, app 
 	argoApp = &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "argoproj.io/v1alpha1",
-			"kind": "Application",
+			"kind":       "Application",
 			"metadata": map[string]interface{}{
-				"name": app.Name,
+				"name":      app.Name,
 				"namespace": "argocd",
 				"labels": map[string]interface{}{
-					"managed-by": "homelab-operator",
+					"managed-by":  "homelab-operator",
 					"homelab-app": app.Name,
 				},
 			},
 			"spec": map[string]interface{}{
 				"project": "default",
 				"source": map[string]interface{}{
-					"repoURL": app.Spec.Repo,
-					"path": app.Spec.Path,
+					"repoURL":        app.Spec.Repo,
+					"path":           app.Spec.Path,
 					"targetRevision": "HEAD",
 				},
 				"destination": map[string]interface{}{
-					"server": "https://kubernetes.default.svc",
+					"server":    "https://kubernetes.default.svc",
 					"namespace": app.Spec.TargetNamespace,
 				},
 				"syncPolicy": map[string]interface{}{
 					"automated": map[string]interface{}{
-						"prune": true,
+						"prune":    true,
 						"selfHeal": true,
 					},
 				},
@@ -179,4 +179,3 @@ func (r *HomelabAppReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("homelabapp").
 		Complete(r)
 }
-
