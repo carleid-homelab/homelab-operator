@@ -18,6 +18,9 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"strings"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,38 +30,33 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	homelabv1alpha1 "github.com/ceid1987/homelab/operator/api/v1alpha1"
 )
 
+const finalizerName = "homelab.carleid.dev/finalizer"
+
 // HomelabAppReconciler reconciles a HomelabApp object
 type HomelabAppReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	CloudflaredConfigMap string
+	CloudflaredNamespace string
 }
 
 // +kubebuilder:rbac:groups=homelab.carleid.dev,resources=homelabapps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=homelab.carleid.dev,resources=homelabapps/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=homelab.carleid.dev,resources=homelabapps/finalizers,verbs=update
-// +kubebuilder:rbac:groups="", resources=namespaces,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=argoproj.io,resources=applications,verbs=get;list;watch;create;update;patch
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the HomelabApp object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.23.3/pkg/reconcile
-
-// Reconcile
 func (r *HomelabAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
-	// 1. Fetch the HomelapApp object
+	// 1. Fetch the HomelabApp object
 	app := &homelabv1alpha1.HomelabApp{}
 	if err := r.Get(ctx, req.NamespacedName, app); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -66,37 +64,77 @@ func (r *HomelabAppReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	log.Info("Reconciling HomelabApp", "name", app.Name, "domain", app.Spec.Domain)
 
-	// 2. Check if target namespace exists
+	// 2. Handle deletion
+	if !app.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, r.handleDeletion(ctx, app)
+	}
+
+	// 3. Register finalizer if domain is set
+	if app.Spec.Domain != "" && !controllerutil.ContainsFinalizer(app, finalizerName) {
+		controllerutil.AddFinalizer(app, finalizerName)
+		if err := r.Update(ctx, app); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	// 4. Ensure namespace
 	if err := r.ensureNamespace(ctx, app); err != nil {
 		log.Error(err, "Failed to ensure namespace")
 		return ctrl.Result{}, err
 	}
 
-	// 3. Check if ArgoCD app exists
+	// 5. Ensure ArgoCD Application
 	if err := r.ensureArgoCDApplication(ctx, app); err != nil {
 		log.Error(err, "Failed to ensure ArgoCD Application")
 		return ctrl.Result{}, err
+	}
+
+	// 6. Ensure cloudflared route if domain is set
+	if app.Spec.Domain != "" {
+		if err := r.ensureCloudflaredRoute(ctx, app); err != nil {
+			log.Error(err, "Failed to ensure cloudflared route")
+			return ctrl.Result{}, err
+		}
 	}
 
 	log.Info("HomelabApp reconciled successfully", "name", app.Name)
 	return ctrl.Result{}, nil
 }
 
-// ensureNamespace - Creates target namespace if it doesn't exist
+// handleDeletion removes the cloudflared route then removes the finalizer
+func (r *HomelabAppReconciler) handleDeletion(ctx context.Context, app *homelabv1alpha1.HomelabApp) error {
+	log := logf.FromContext(ctx)
+
+	if controllerutil.ContainsFinalizer(app, finalizerName) {
+		if app.Spec.Domain != "" {
+			if err := r.removeCloudflaredRoute(ctx, app); err != nil {
+				log.Error(err, "Failed to remove cloudflared route")
+				return err
+			}
+		}
+
+		controllerutil.RemoveFinalizer(app, finalizerName)
+		if err := r.Update(ctx, app); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// ensureNamespace creates the target namespace if it doesn't exist
 func (r *HomelabAppReconciler) ensureNamespace(ctx context.Context, app *homelabv1alpha1.HomelabApp) error {
 	log := logf.FromContext(ctx)
 
 	ns := &corev1.Namespace{}
 	err := r.Get(ctx, types.NamespacedName{Name: app.Spec.TargetNamespace}, ns)
 	if err == nil {
-		// Already exists?
 		return nil
 	}
 	if !errors.IsNotFound(err) {
 		return err
 	}
 
-	// Create ns
 	ns = &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: app.Spec.TargetNamespace,
@@ -110,7 +148,7 @@ func (r *HomelabAppReconciler) ensureNamespace(ctx context.Context, app *homelab
 	return r.Create(ctx, ns)
 }
 
-// ensureArgoCDApplication - Creates ArgoCD app if it doesn't exist
+// ensureArgoCDApplication creates the ArgoCD Application if it doesn't exist
 func (r *HomelabAppReconciler) ensureArgoCDApplication(ctx context.Context, app *homelabv1alpha1.HomelabApp) error {
 	log := logf.FromContext(ctx)
 
@@ -127,14 +165,12 @@ func (r *HomelabAppReconciler) ensureArgoCDApplication(ctx context.Context, app 
 	}, argoApp)
 
 	if err == nil {
-		// Already exists
 		return nil
 	}
 	if !errors.IsNotFound(err) {
 		return err
 	}
 
-	// Build ArgoCD app object
 	argoApp = &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "argoproj.io/v1alpha1",
@@ -170,6 +206,76 @@ func (r *HomelabAppReconciler) ensureArgoCDApplication(ctx context.Context, app 
 
 	log.Info("Creating ArgoCD Application", "name", app.Name, "path", app.Spec.Path)
 	return r.Create(ctx, argoApp)
+}
+
+// ensureCloudflaredRoute adds an ingress entry to the cloudflared ConfigMap if not present
+func (r *HomelabAppReconciler) ensureCloudflaredRoute(ctx context.Context, app *homelabv1alpha1.HomelabApp) error {
+	log := logf.FromContext(ctx)
+
+	cm := &corev1.ConfigMap{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      r.CloudflaredConfigMap,
+		Namespace: r.CloudflaredNamespace,
+	}, cm); err != nil {
+		return err
+	}
+
+	config := cm.Data["config.yaml"]
+
+	if strings.Contains(config, app.Spec.Domain) {
+		return nil
+	}
+
+	newEntry := fmt.Sprintf("    - hostname: %s\n      service: http://%s.%s.svc.cluster.local:80\n",
+		app.Spec.Domain,
+		app.Name,
+		app.Spec.TargetNamespace,
+	)
+
+	catchAll := "    - service: http_status:404"
+	if !strings.Contains(config, catchAll) {
+		return fmt.Errorf("cloudflared config missing catch-all rule, cannot safely patch")
+	}
+
+	config = strings.Replace(config, catchAll, newEntry+catchAll, 1)
+	cm.Data["config.yaml"] = config
+
+	log.Info("Adding cloudflared route", "domain", app.Spec.Domain)
+	return r.Update(ctx, cm)
+}
+
+// removeCloudflaredRoute removes the ingress entry from the cloudflared ConfigMap
+func (r *HomelabAppReconciler) removeCloudflaredRoute(ctx context.Context, app *homelabv1alpha1.HomelabApp) error {
+	log := logf.FromContext(ctx)
+
+	cm := &corev1.ConfigMap{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      r.CloudflaredConfigMap,
+		Namespace: r.CloudflaredNamespace,
+	}, cm); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+
+	config := cm.Data["config.yaml"]
+
+	entry := fmt.Sprintf("    - hostname: %s\n      service: http://%s.%s.svc.cluster.local:80\n",
+		app.Spec.Domain,
+		app.Name,
+		app.Spec.TargetNamespace,
+	)
+
+	if !strings.Contains(config, app.Spec.Domain) {
+		return nil
+	}
+
+	config = strings.Replace(config, entry, "", 1)
+	cm.Data["config.yaml"] = config
+
+	log.Info("Removing cloudflared route", "domain", app.Spec.Domain)
+	return r.Update(ctx, cm)
 }
 
 // SetupWithManager sets up the controller with the Manager.

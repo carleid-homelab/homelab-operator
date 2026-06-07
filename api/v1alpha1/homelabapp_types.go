@@ -31,8 +31,8 @@ type HomelabAppSpec struct {
 	Path string `json:"path"`
 
 	// Domain is the public hostname to expose the app on
-	// +kubebuilder:validation:Required
-	Domain string `json:"domain"`
+	// +optional
+	Domain string `json:"domain,omitempty"`
 
 	//TargetNamespace is the namespace the app will be deployed into
 	// +kubebuilder:validation:Required

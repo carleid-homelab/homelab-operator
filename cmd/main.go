@@ -52,6 +52,13 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
+func getEnv(key, defaultValue string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return defaultValue
+}
+
 // nolint:gocyclo
 func main() {
 	var metricsAddr string
@@ -181,6 +188,8 @@ func main() {
 	if err := (&controller.HomelabAppReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+		CloudflaredConfigMap: getEnv("CLOUDFLARED_CONFIGMAP", "cloudflared"),
+		CloudflaredNamespace: getEnv("CLOUDFLARED_NAMESPACE", "apps"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "homelabapp")
 		os.Exit(1)

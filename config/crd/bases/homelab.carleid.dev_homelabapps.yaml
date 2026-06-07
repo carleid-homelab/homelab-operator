@@ -64,7 +64,6 @@ spec:
                   into
                 type: string
             required:
-            - domain
             - path
             - repo
             - targetNamespace
