@@ -17,9 +17,9 @@ limitations under the License.
 package controller
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -33,6 +33,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	"gopkg.in/yaml.v3"
+
 	homelabv1alpha1 "github.com/ceid1987/homelab/operator/api/v1alpha1"
 )
 
@@ -41,7 +43,7 @@ const finalizerName = "homelab.carleid.dev/finalizer"
 // HomelabAppReconciler reconciles a HomelabApp object
 type HomelabAppReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme               *runtime.Scheme
 	CloudflaredConfigMap string
 	CloudflaredNamespace string
 }
@@ -208,74 +210,151 @@ func (r *HomelabAppReconciler) ensureArgoCDApplication(ctx context.Context, app 
 	return r.Create(ctx, argoApp)
 }
 
-// ensureCloudflaredRoute adds an ingress entry to the cloudflared ConfigMap if not present
-func (r *HomelabAppReconciler) ensureCloudflaredRoute(ctx context.Context, app *homelabv1alpha1.HomelabApp) error {
-	log := logf.FromContext(ctx)
+// cloudflaredIngressRule is one rule in cloudflared's ingress list. Any extra
+// keys (path, originRequest, …) are preserved through the inline map.
+type cloudflaredIngressRule struct {
+	Hostname string                 `yaml:"hostname,omitempty"`
+	Service  string                 `yaml:"service,omitempty"`
+	Extra    map[string]interface{} `yaml:",inline"`
+}
 
+// cloudflaredConfig models cloudflared's config.yaml. Top-level keys other than
+// "ingress" (tunnel, metrics, no-autoupdate, …) are preserved via the inline map.
+type cloudflaredConfig struct {
+	Ingress []cloudflaredIngressRule `yaml:"ingress"`
+	Extra   map[string]interface{}   `yaml:",inline"`
+}
+
+func parseCloudflaredConfig(raw string) (*cloudflaredConfig, error) {
+	cfg := &cloudflaredConfig{}
+	if err := yaml.Unmarshal([]byte(raw), cfg); err != nil {
+		return nil, fmt.Errorf("parsing cloudflared config.yaml: %w", err)
+	}
+	return cfg, nil
+}
+
+func marshalCloudflaredConfig(cfg *cloudflaredConfig) (string, error) {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(cfg); err != nil {
+		_ = enc.Close()
+		return "", fmt.Errorf("marshaling cloudflared config.yaml: %w", err)
+	}
+	if err := enc.Close(); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+// serviceURL is the in-cluster address cloudflared forwards the hostname to.
+func serviceURL(app *homelabv1alpha1.HomelabApp) string {
+	return fmt.Sprintf("http://%s.%s.svc.cluster.local:80", app.Name, app.Spec.TargetNamespace)
+}
+
+// catchAllIndex returns the index of the catch-all rule (the rule with no
+// hostname, e.g. `service: http_status:404`), or -1 if there is none.
+func catchAllIndex(rules []cloudflaredIngressRule) int {
+	for i, rule := range rules {
+		if rule.Hostname == "" {
+			return i
+		}
+	}
+	return -1
+}
+
+func (r *HomelabAppReconciler) getCloudflaredConfig(ctx context.Context) (*corev1.ConfigMap, *cloudflaredConfig, error) {
 	cm := &corev1.ConfigMap{}
 	if err := r.Get(ctx, types.NamespacedName{
 		Name:      r.CloudflaredConfigMap,
 		Namespace: r.CloudflaredNamespace,
 	}, cm); err != nil {
+		return nil, nil, err
+	}
+	cfg, err := parseCloudflaredConfig(cm.Data["config.yaml"])
+	if err != nil {
+		return nil, nil, err
+	}
+	return cm, cfg, nil
+}
+
+func (r *HomelabAppReconciler) writeCloudflaredConfig(ctx context.Context, cm *corev1.ConfigMap, cfg *cloudflaredConfig) error {
+	out, err := marshalCloudflaredConfig(cfg)
+	if err != nil {
 		return err
 	}
-
-	config := cm.Data["config.yaml"]
-
-	if strings.Contains(config, app.Spec.Domain) {
-		return nil
+	if cm.Data == nil {
+		cm.Data = map[string]string{}
 	}
-
-	newEntry := fmt.Sprintf("    - hostname: %s\n      service: http://%s.%s.svc.cluster.local:80\n",
-		app.Spec.Domain,
-		app.Name,
-		app.Spec.TargetNamespace,
-	)
-
-	catchAll := "    - service: http_status:404"
-	if !strings.Contains(config, catchAll) {
-		return fmt.Errorf("cloudflared config missing catch-all rule, cannot safely patch")
-	}
-
-	config = strings.Replace(config, catchAll, newEntry+catchAll, 1)
-	cm.Data["config.yaml"] = config
-
-	log.Info("Adding cloudflared route", "domain", app.Spec.Domain)
+	cm.Data["config.yaml"] = out
 	return r.Update(ctx, cm)
 }
 
-// removeCloudflaredRoute removes the ingress entry from the cloudflared ConfigMap
+// ensureCloudflaredRoute makes sure the cloudflared ingress list has a rule for
+// the app's domain pointing at its Service, inserted before the catch-all.
+func (r *HomelabAppReconciler) ensureCloudflaredRoute(ctx context.Context, app *homelabv1alpha1.HomelabApp) error {
+	log := logf.FromContext(ctx)
+
+	cm, cfg, err := r.getCloudflaredConfig(ctx)
+	if err != nil {
+		return err
+	}
+
+	desired := serviceURL(app)
+
+	// If a rule for this hostname already exists, just make sure it points at
+	// the right service.
+	for i := range cfg.Ingress {
+		if cfg.Ingress[i].Hostname == app.Spec.Domain {
+			if cfg.Ingress[i].Service == desired {
+				return nil
+			}
+			cfg.Ingress[i].Service = desired
+			log.Info("Updating cloudflared route", "domain", app.Spec.Domain, "service", desired)
+			return r.writeCloudflaredConfig(ctx, cm, cfg)
+		}
+	}
+
+	// Otherwise insert a new rule just before the catch-all so it stays last.
+	idx := catchAllIndex(cfg.Ingress)
+	if idx == -1 {
+		return fmt.Errorf("cloudflared config missing catch-all ingress rule, cannot safely patch")
+	}
+	newRule := cloudflaredIngressRule{Hostname: app.Spec.Domain, Service: desired}
+	cfg.Ingress = append(cfg.Ingress[:idx], append([]cloudflaredIngressRule{newRule}, cfg.Ingress[idx:]...)...)
+
+	log.Info("Adding cloudflared route", "domain", app.Spec.Domain, "service", desired)
+	return r.writeCloudflaredConfig(ctx, cm, cfg)
+}
+
+// removeCloudflaredRoute removes the ingress rule for the app's domain.
 func (r *HomelabAppReconciler) removeCloudflaredRoute(ctx context.Context, app *homelabv1alpha1.HomelabApp) error {
 	log := logf.FromContext(ctx)
 
-	cm := &corev1.ConfigMap{}
-	if err := r.Get(ctx, types.NamespacedName{
-		Name:      r.CloudflaredConfigMap,
-		Namespace: r.CloudflaredNamespace,
-	}, cm); err != nil {
+	cm, cfg, err := r.getCloudflaredConfig(ctx)
+	if err != nil {
 		if errors.IsNotFound(err) {
 			return nil
 		}
 		return err
 	}
 
-	config := cm.Data["config.yaml"]
-
-	entry := fmt.Sprintf("    - hostname: %s\n      service: http://%s.%s.svc.cluster.local:80\n",
-		app.Spec.Domain,
-		app.Name,
-		app.Spec.TargetNamespace,
-	)
-
-	if !strings.Contains(config, app.Spec.Domain) {
+	kept := make([]cloudflaredIngressRule, 0, len(cfg.Ingress))
+	removed := false
+	for _, rule := range cfg.Ingress {
+		if rule.Hostname == app.Spec.Domain {
+			removed = true
+			continue
+		}
+		kept = append(kept, rule)
+	}
+	if !removed {
 		return nil
 	}
-
-	config = strings.Replace(config, entry, "", 1)
-	cm.Data["config.yaml"] = config
+	cfg.Ingress = kept
 
 	log.Info("Removing cloudflared route", "domain", app.Spec.Domain)
-	return r.Update(ctx, cm)
+	return r.writeCloudflaredConfig(ctx, cm, cfg)
 }
 
 // SetupWithManager sets up the controller with the Manager.
