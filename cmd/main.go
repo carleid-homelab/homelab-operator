@@ -35,8 +35,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	homelabv1alpha1 "github.com/ceid1987/homelab/operator/api/v1alpha1"
-	"github.com/ceid1987/homelab/operator/internal/controller"
+	"github.com/carleid-homelab/homelab-operator/internal/controller"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -47,8 +46,6 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-
-	utilruntime.Must(homelabv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -185,13 +182,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := (&controller.HomelabAppReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		CloudflaredConfigMap: getEnv("CLOUDFLARED_CONFIGMAP", "cloudflared"),
-		CloudflaredNamespace: getEnv("CLOUDFLARED_NAMESPACE", "apps"),
+	if err := (&controller.ServiceRouteReconciler{
+		Client:                mgr.GetClient(),
+		Scheme:                mgr.GetScheme(),
+		CloudflaredConfigMap:  getEnv("CLOUDFLARED_CONFIGMAP", "cloudflared"),
+		CloudflaredDeployment: getEnv("CLOUDFLARED_DEPLOYMENT", "cloudflared"),
+		CloudflaredNamespace:  getEnv("CLOUDFLARED_NAMESPACE", "apps"),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "Failed to create controller", "controller", "homelabapp")
+		setupLog.Error(err, "Failed to create controller", "controller", "serviceroute")
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder

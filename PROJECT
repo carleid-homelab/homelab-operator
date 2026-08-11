@@ -7,15 +7,5 @@ domain: carleid.dev
 layout:
 - go.kubebuilder.io/v4
 projectName: operator
-repo: github.com/ceid1987/homelab/operator
-resources:
-- api:
-    crdVersion: v1
-    namespaced: true
-  controller: true
-  domain: carleid.dev
-  group: homelab
-  kind: HomelabApp
-  path: github.com/ceid1987/homelab/operator/api/v1alpha1
-  version: v1alpha1
+repo: github.com/carleid-homelab/homelab-operator
 version: "3"

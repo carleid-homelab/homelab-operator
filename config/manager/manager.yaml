@@ -68,6 +68,8 @@ spec:
         env:
           - name: CLOUDFLARED_CONFIGMAP
             value: "cloudflared"
+          - name: CLOUDFLARED_DEPLOYMENT
+            value: "cloudflared"
           - name: CLOUDFLARED_NAMESPACE
             value: "apps"
         ports:

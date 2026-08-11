@@ -1,121 +1,87 @@
-# operator
-// TODO(user): Add simple overview of use/purpose
+# homelab-operator
 
-## Description
-// TODO(user): An in-depth paragraph about your project and overview of use
+A Kubernetes controller that publishes Services through a
+[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
+by annotation, for the cluster described in
+[ceid1987/homelab](https://github.com/ceid1987/homelab).
 
-## Getting Started
+Annotate a Service with the hostname it should answer on:
 
-### Prerequisites
-- go version v1.24.6+
-- docker version 17.03+.
-- kubectl version v1.11.3+.
-- Access to a Kubernetes v1.11.3+ cluster.
-
-### To Deploy on the cluster
-**Build and push your image to the location specified by `IMG`:**
-
-```sh
-make docker-build docker-push IMG=<some-registry>/operator:tag
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: homelab-web
+  annotations:
+    homelab.carleid.dev/domain: homelab.carleid.dev
 ```
 
-**NOTE:** This image ought to be published in the personal registry you specified.
-And it is required to have access to pull the image from the working environment.
-Make sure you have the proper permission to the registry if the above commands don’t work.
+The operator adds a matching rule to the cloudflared ingress list, pointing at that Service's
+in-cluster address. Remove the annotation, or the Service, and the rule goes with it.
 
-**Install the CRDs into the cluster:**
+## How it works
+
+The controller watches Services carrying `homelab.carleid.dev/domain`. On any change it lists
+every annotated Service in the cluster and rebuilds the tunnel's entire ingress list from
+scratch, rather than patching individual rules:
+
+1. Read the cloudflared `ConfigMap` and parse `config.yaml`.
+2. Build one ingress rule per annotated Service, sorted by hostname, resolving the backend from
+   the Service's real name, namespace and first port.
+3. Append the catch-all, which must stay last or every unmatched hostname would 404.
+4. Write the ConfigMap only if the result differs, then stamp a digest of it onto the
+   cloudflared pod template so the tunnel rolls and reads the new config.
+
+Rebuilding wholesale means deleted Services and removed annotations need no special handling,
+and no finalizer is required — the config converges on cluster state from any starting point.
+Top-level keys the operator does not manage (`tunnel`, `metrics`, `no-autoupdate`) and per-rule
+extras such as `originRequest` are preserved across a rebuild.
+
+**Deliberately not handled:** creating namespaces or ArgoCD `Application`s. ArgoCD does both
+natively — `CreateNamespace=true` and an `ApplicationSet` — so the operator does only the part
+Argo cannot.
+
+### Configuration
+
+| Environment variable | Default | Purpose |
+|---|---|---|
+| `CLOUDFLARED_CONFIGMAP` | `cloudflared` | ConfigMap holding `config.yaml` |
+| `CLOUDFLARED_DEPLOYMENT` | `cloudflared` | Deployment to roll after a config change |
+| `CLOUDFLARED_NAMESPACE` | `apps` | Namespace of both |
+
+Two Services claiming the same hostname is a misconfiguration. The lower `namespace/name` wins,
+deterministically, and the conflict is logged rather than flapping between claimants.
+
+## Deployment
+
+CI builds `ghcr.io/carleid-homelab/homelab-operator` on every push to `main` and publishes a
+rendered `dist/install.yaml` to the `deploy` branch, which ArgoCD syncs. The `deploy` branch is
+build output — regenerated from `main` on every run, never edited by hand.
+
+To install it manually into any cluster:
 
 ```sh
-make install
+kubectl apply -f https://raw.githubusercontent.com/carleid-homelab/homelab-operator/deploy/dist/install.yaml
 ```
 
-**Deploy the Manager to the cluster with the image specified by `IMG`:**
+## Development
 
 ```sh
-make deploy IMG=<some-registry>/operator:tag
-```
-
-> **NOTE**: If you encounter RBAC errors, you may need to grant yourself cluster-admin
-privileges or be logged in as admin.
-
-**Create instances of your solution**
-You can apply the samples (examples) from the config/sample:
-
-```sh
-kubectl apply -k config/samples/
-```
-
->**NOTE**: Ensure that the samples has default values to test it out.
-
-### To Uninstall
-**Delete the instances (CRs) from the cluster:**
-
-```sh
-kubectl delete -k config/samples/
-```
-
-**Delete the APIs(CRDs) from the cluster:**
-
-```sh
-make uninstall
-```
-
-**UnDeploy the controller from the cluster:**
-
-```sh
+make test                 # unit tests
+make lint                 # golangci-lint
+make docker-build docker-push IMG=<registry>/homelab-operator:tag
+make deploy IMG=<registry>/homelab-operator:tag
 make undeploy
 ```
 
-## Project Distribution
+The route-building logic is pure — it takes a slice of Services and returns ingress rules — so
+`go test ./internal/...` covers sorting, port derivation, extras preservation, duplicate
+resolution and YAML round-tripping without a cluster. The e2e suite (`make test-e2e`) needs a
+[kind](https://sigs.k8s.io/kind) cluster.
 
-Following the options to release and provide this solution to the users.
-
-### By providing a bundle with all YAML files
-
-1. Build the installer for the image built and published in the registry:
-
-```sh
-make build-installer IMG=<some-registry>/operator:tag
-```
-
-**NOTE:** The makefile target mentioned above generates an 'install.yaml'
-file in the dist directory. This file contains all the resources built
-with Kustomize, which are necessary to install this project without its
-dependencies.
-
-2. Using the installer
-
-Users can just run 'kubectl apply -f <URL for YAML BUNDLE>' to install
-the project, i.e.:
-
-```sh
-kubectl apply -f https://raw.githubusercontent.com/<org>/operator/<tag or branch>/dist/install.yaml
-```
-
-### By providing a Helm Chart
-
-1. Build the chart using the optional helm plugin
-
-```sh
-kubebuilder edit --plugins=helm/v2-alpha
-```
-
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
-
-**NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
-
-## Contributing
-// TODO(user): Add detailed information on how you would like others to contribute to this project
-
-**NOTE:** Run `make help` for more information on all potential `make` targets
-
-More information can be found via the [Kubebuilder Documentation](https://book.kubebuilder.io/introduction.html)
+Run `make help` for all targets. Built with
+[kubebuilder](https://book.kubebuilder.io/introduction.html); there is no CRD, so `make install`
+and `make uninstall` are no-ops.
 
 ## License
 
@@ -132,4 +98,3 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
-

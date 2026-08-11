@@ -17,46 +17,15 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - namespaces
+  - services
   verbs:
-  - create
   - get
   - list
   - watch
 - apiGroups:
-  - argoproj.io
+  - apps
   resources:
-  - applications
-  verbs:
-  - create
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - homelab.carleid.dev
-  resources:
-  - homelabapps
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - homelab.carleid.dev
-  resources:
-  - homelabapps/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - homelab.carleid.dev
-  resources:
-  - homelabapps/status
+  - deployments
   verbs:
   - get
   - patch
-  - update

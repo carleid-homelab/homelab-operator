@@ -7,6 +7,9 @@
 bin/*
 Dockerfile.cross
 
+# Rendered by 'make build-installer'; published to the deploy branch by CI.
+dist/
+
 # Test binary, built with `go test -c`
 *.test
 

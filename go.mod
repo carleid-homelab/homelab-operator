@@ -1,4 +1,4 @@
-module github.com/ceid1987/homelab/operator
+module github.com/carleid-homelab/homelab-operator
 
 go 1.25.7
 

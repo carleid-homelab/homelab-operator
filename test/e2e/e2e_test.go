@@ -30,7 +30,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/ceid1987/homelab/operator/test/utils"
+	"github.com/carleid-homelab/homelab-operator/test/utils"
 )
 
 // namespace where the project is deployed in
