@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: ghcr.io/carleid-homelab/homelab-operator
-  newTag: latest
+  newTag: ad56ad658e4c44c7087b4733ff7b772292b1358a
