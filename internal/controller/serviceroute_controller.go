@@ -277,8 +277,8 @@ func ingressEqual(a, b []cloudflaredIngressRule) bool {
 // cloudflaredIngressRule is one rule in cloudflared's ingress list. Any extra
 // keys (path, originRequest, …) are preserved through the inline map.
 type cloudflaredIngressRule struct {
-	Hostname string                 `yaml:"hostname,omitempty"`
-	Service  string                 `yaml:"service,omitempty"`
+	Hostname string         `yaml:"hostname,omitempty"`
+	Service  string         `yaml:"service,omitempty"`
 	Extra    map[string]any `yaml:",inline"`
 }
 
@@ -286,7 +286,7 @@ type cloudflaredIngressRule struct {
 // "ingress" (tunnel, metrics, no-autoupdate, …) are preserved via the inline map.
 type cloudflaredConfig struct {
 	Ingress []cloudflaredIngressRule `yaml:"ingress"`
-	Extra   map[string]any   `yaml:",inline"`
+	Extra   map[string]any           `yaml:",inline"`
 }
 
 func parseCloudflaredConfig(raw string) (*cloudflaredConfig, error) {
